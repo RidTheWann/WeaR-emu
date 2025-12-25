@@ -114,16 +114,6 @@ Currently running:
 
 ---
 
-## Roadmap
-
-- [ ] **Phase 16**: Complete x86-64 instruction set
-- [ ] **Phase 17**: GCN → SPIR-V shader recompiler
-- [ ] **Phase 18**: Texture caching and render target management
-- [ ] **Phase 19**: Game database and compatibility tracking
-- [ ] **Phase 20**: Linux/macOS support
-
----
-
 ## Quick Start
 
 ```bash
