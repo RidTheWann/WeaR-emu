@@ -151,7 +151,7 @@ See [BUILD.md](BUILD.md) for detailed build instructions.
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/wearm-emu-first-launch.png" alt="WeaR-emu First Launch" width="800"/>
+  <img src="resources/screenshot.png" alt="WeaR-emu" width="800"/>
 </p>
 
 | Feature | Status |
