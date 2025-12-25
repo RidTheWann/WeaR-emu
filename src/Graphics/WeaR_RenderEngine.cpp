@@ -782,25 +782,156 @@ std::expected<void, WeaR_RenderEngine::ErrorType> WeaR_RenderEngine::createSyncO
 }
 
 // =============================================================================
+// MEMORY TYPE FINDER (Bulletproof with Fallback)
+// =============================================================================
+
+uint32_t WeaR_RenderEngine::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProperties);
+
+    // First pass: exact match
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((typeFilter & (1 << i)) && 
+            (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+            std::cout << "[VULKAN] Found exact memory type " << i 
+                      << " for flags 0x" << std::hex << properties << std::dec << "\n";
+            return i;
+        }
+    }
+
+    // Second pass: partial match (at least HOST_VISIBLE if requested)
+    if (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+        for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+            if ((typeFilter & (1 << i)) && 
+                (memProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+                std::cout << "[VULKAN] Using fallback memory type " << i << " (HOST_VISIBLE only)\n";
+                return i;
+            }
+        }
+    }
+
+    // Third pass: any compatible memory
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if (typeFilter & (1 << i)) {
+            std::cout << "[VULKAN] Using last-resort memory type " << i << "\n";
+            return i;
+        }
+    }
+
+    std::cerr << "[VULKAN] ERROR: No compatible memory type found!\n";
+    std::cerr << "[VULKAN] Available memory types:\n";
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        std::cerr << "  Type " << i << ": flags=0x" << std::hex 
+                  << memProperties.memoryTypes[i].propertyFlags << std::dec << "\n";
+    }
+    return UINT32_MAX;
+}
+
+// =============================================================================
+// BUFFER CREATION (Raw Vulkan with Fallback)
+// =============================================================================
+
+AllocatedBuffer WeaR_RenderEngine::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage) {
+    AllocatedBuffer result{};
+    result.size = size;
+
+    // Create buffer
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &result.buffer) != VK_SUCCESS) {
+        std::cerr << "[VULKAN] Failed to create buffer object\n";
+        return result;
+    }
+
+    // Get memory requirements
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(m_device, result.buffer, &memReqs);
+
+    // Try HOST_VISIBLE | HOST_COHERENT first (for CPU access)
+    VkMemoryPropertyFlags desiredProperties = 
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    
+    uint32_t memTypeIndex = findMemoryType(memReqs.memoryTypeBits, desiredProperties);
+    
+    if (memTypeIndex == UINT32_MAX) {
+        std::cerr << "[VULKAN] Trying HOST_VISIBLE only...\n";
+        memTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+    }
+    
+    if (memTypeIndex == UINT32_MAX) {
+        std::cerr << "[VULKAN] Trying DEVICE_LOCAL only...\n";
+        memTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    }
+
+    if (memTypeIndex == UINT32_MAX) {
+        std::cerr << "[VULKAN] All memory allocation attempts failed!\n";
+        vkDestroyBuffer(m_device, result.buffer, nullptr);
+        result.buffer = VK_NULL_HANDLE;
+        return result;
+    }
+
+    // Allocate memory
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = memTypeIndex;
+
+    VkDeviceMemory bufferMemory;
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
+        std::cerr << "[VULKAN] Failed to allocate buffer memory\n";
+        vkDestroyBuffer(m_device, result.buffer, nullptr);
+        result.buffer = VK_NULL_HANDLE;
+        return result;
+    }
+
+    // Bind memory to buffer
+    if (vkBindBufferMemory(m_device, result.buffer, bufferMemory, 0) != VK_SUCCESS) {
+        std::cerr << "[VULKAN] Failed to bind buffer memory\n";
+        vkFreeMemory(m_device, bufferMemory, nullptr);
+        vkDestroyBuffer(m_device, result.buffer, nullptr);
+        result.buffer = VK_NULL_HANDLE;
+        return result;
+    }
+
+    // Store memory handle (abuse allocation field for raw memory handle)
+    result.allocation = reinterpret_cast<VmaAllocation>(bufferMemory);
+    
+    std::cout << "[VULKAN] Buffer created: size=" << size << ", memType=" << memTypeIndex << "\n";
+    return result;
+}
+
+// =============================================================================
 // VERTEX BUFFER & TRIANGLE PIPELINE
 // =============================================================================
 
 std::expected<void, WeaR_RenderEngine::ErrorType> WeaR_RenderEngine::createVertexBuffer() {
     VkDeviceSize bufferSize = sizeof(Vertex) * TRIANGLE_VERTICES.size();
     
-    m_vertexBuffer = createBuffer(bufferSize, 
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    std::cout << "[VULKAN] Creating vertex buffer, size=" << bufferSize << " bytes\n";
+    
+    m_vertexBuffer = createBuffer(bufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     
     if (!m_vertexBuffer.buffer) {
-        return std::unexpected("Failed to create vertex buffer");
+        return std::unexpected("Failed to create vertex buffer - GPU memory allocation failed");
     }
 
-    // Copy data (simplified - would normally use staging buffer)
+    // Map and copy vertex data
+    VkDeviceMemory bufferMemory = reinterpret_cast<VkDeviceMemory>(m_vertexBuffer.allocation);
     void* data;
-    vmaMapMemory(m_allocator, m_vertexBuffer.allocation, &data);
+    VkResult mapResult = vkMapMemory(m_device, bufferMemory, 0, bufferSize, 0, &data);
+    if (mapResult != VK_SUCCESS) {
+        std::cerr << "[VULKAN] Failed to map vertex buffer memory, result=" << mapResult << "\n";
+        return std::unexpected("Failed to map vertex buffer memory");
+    }
+    
     memcpy(data, TRIANGLE_VERTICES.data(), bufferSize);
-    vmaUnmapMemory(m_allocator, m_vertexBuffer.allocation);
-
+    vkUnmapMemory(m_device, bufferMemory);
+    
+    std::cout << "[VULKAN] Vertex buffer created successfully\n";
     return {};
 }
 
@@ -943,25 +1074,7 @@ std::expected<void, WeaR_RenderEngine::ErrorType> WeaR_RenderEngine::allocateFra
 // BUFFER/IMAGE HELPERS
 // =============================================================================
 
-AllocatedBuffer WeaR_RenderEngine::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage) {
-    AllocatedBuffer result{};
-    result.size = size;
-
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = size;
-    bufferInfo.usage = usage;
-
-    VmaAllocationCreateInfo allocInfo{};
-    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-
-    if (vmaCreateBuffer(m_allocator, &bufferInfo, &allocInfo, 
-                        &result.buffer, &result.allocation, nullptr) != VK_SUCCESS) {
-        return {};
-    }
-    return result;
-}
+// createBuffer is defined earlier in this file with VMA HOST_VISIBLE flags
 
 void WeaR_RenderEngine::destroyBuffer(AllocatedBuffer& buffer) {
     if (buffer.buffer) vmaDestroyBuffer(m_allocator, buffer.buffer, buffer.allocation);
@@ -1030,3 +1143,4 @@ void WeaR_RenderEngine::onWindowResize(uint32_t w, uint32_t h) {
 }
 
 } // namespace WeaR
+

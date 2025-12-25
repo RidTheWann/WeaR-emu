@@ -5,4 +5,7 @@
     <qresource prefix="/shaders">
         <file>../shaders/framegen.comp</file>
     </qresource>
+    <qresource prefix="/resources">
+        <file>wear_logo.png</file>
+    </qresource>
 </RCC>

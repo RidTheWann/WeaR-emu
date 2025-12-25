@@ -1,472 +1,545 @@
 #include "WeaR_GUI.h"
+#include "WeaR_Style.h"
+#include "WeaR_SettingsDialog.h"
 #include "WeaR_Logger.h"
+
 #include "Graphics/WeaR_RenderEngine.h"
 #include "Core/WeaR_System.h"
-#include "HLE/WeaR_Syscalls.h"
-#include "HLE/FileSystem/WeaR_VFS.h"
+#include "Core/WeaR_EmulatorCore.h"
 #include "Input/WeaR_Input.h"
 
 #include <QApplication>
-#include <QLabel>
-#include <QPushButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QFrame>
-#include <QMouseEvent>
-#include <QFile>
-#include <QFileDialog>
-#include <QMessageBox>
+#include <QLabel>
+#include <QPushButton>
+#include <QToolBar>
+#include <QTableWidget>
+#include <QHeaderView>
 #include <QDockWidget>
 #include <QTextEdit>
-#include <QScrollBar>
-#include <QShowEvent>
-#include <QResizeEvent>
-#include <QCloseEvent>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QStatusBar>
+#include <QAction>
 #include <QKeyEvent>
+#include <QShowEvent>
+#include <QCloseEvent>
+#include <QFileInfo>
+#include <QDir>
 
-#include <format>
 #include <iostream>
-
-#ifdef Q_OS_WIN
-#include <Windows.h>
-#include <dwmapi.h>
-#pragma comment(lib, "dwmapi.lib")
-#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
-#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
-#endif
-#ifndef DWMWA_SYSTEMBACKDROP_TYPE
-#define DWMWA_SYSTEMBACKDROP_TYPE 38
-#endif
-// DWM_SYSTEMBACKDROP_TYPE values are in Windows 11 SDK - no custom enum needed
-#endif
 
 namespace WeaR {
 
-namespace Colors {
-    constexpr QColor NeonGreen{0, 255, 157};
-    constexpr QColor Grey{136, 136, 136};
-    constexpr QColor Red{255, 68, 68};
-}
+// =============================================================================
+// CONSTRUCTOR / DESTRUCTOR
+// =============================================================================
 
 WeaR_GUI::WeaR_GUI(const WeaR_Specs& specs, QWidget* parent)
-    : QMainWindow(parent), m_specs(specs)
-    , m_engine(std::make_unique<WeaR_RenderEngine>())
-    , m_system(std::make_unique<WeaR_System>())
+    : QMainWindow(parent)
+    , m_specs(specs)
 {
-    setWindowTitle("WeaR-emu");
-    setMinimumSize(1100, 700);
-    resize(1400, 850);
-    setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
-    setAttribute(Qt::WA_TranslucentBackground);
+    setWindowTitle("WeaR-emu - PlayStation 4 Emulator");
+    setMinimumSize(1000, 650);
+    resize(1200, 750);
 
-    m_frameGenStatus = m_specs.canRunFrameGen ? WeaRGenUIStatus::Active : WeaRGenUIStatus::Unsupported;
-    m_accentColor = m_specs.canRunFrameGen ? Colors::NeonGreen : Colors::Grey;
-
+    applyStylesheet();
     setupUI();
-    setupCpuMonitorDock();
-    setupKernelLogDock();
-    loadStylesheet();
-    enableWindowsAcrylicBlur();
+    initializeInputSystem();
 
-    m_renderTimer = new QTimer(this);
-    m_renderTimer->setTimerType(Qt::PreciseTimer);
-    connect(m_renderTimer, &QTimer::timeout, this, &WeaR_GUI::onRenderFrame);
+    // Connect global logger to GUI log console
+    connect(&getLogger(), &WeaR_Logger::logAdded, this, [this](const QString& message, int level) {
+        if (m_logConsole) {
+            QString color;
+            switch (level) {
+                case 0: color = "#5A5A5A"; break;  // Debug
+                case 1: color = "#CCCCCC"; break;  // Info
+                case 2: color = "#E67E22"; break;  // Warning
+                case 3: color = "#E74C3C"; break;  // Error
+                default: color = "#CCCCCC";
+            }
+            m_logConsole->append(QString("<span style='color:%1'>%2</span>").arg(color, message));
+        }
+    });
 
-    m_cpuMonitorTimer = new QTimer(this);
-    m_cpuMonitorTimer->setInterval(60);
-    connect(m_cpuMonitorTimer, &QTimer::timeout, this, &WeaR_GUI::onCpuMonitorUpdate);
+    // Set application icon (for Windows taskbar only)
+    QApplication::setWindowIcon(QIcon(":/resources/wear_logo.png"));
+    // Remove icon from window title bar (keep only in taskbar)
+    setWindowIcon(QIcon());
 
-    // Connect logger to UI
-    connect(&getLogger(), &WeaR_Logger::logAdded, this, &WeaR_GUI::onKernelLogUpdate, Qt::QueuedConnection);
+    log("[CORE] WeaR-emu initialized", 1);
+    log(QString("[GPU] %1").arg(QString::fromStdString(m_specs.gpuName)), 1);
+    log(QString("[WEAR-GEN] %1").arg(m_specs.canRunFrameGen ? "Available" : "Not Supported"), 1);
 }
 
 WeaR_GUI::~WeaR_GUI() {
     stopRenderLoop();
-    m_cpuMonitorTimer->stop();
-    if (m_system) m_system->shutdown();
-    if (m_engine) m_engine->shutdown();
 }
 
-void WeaR_GUI::initializeSystem() {
-    if (m_systemInitialized) return;
-    if (m_system->initialize(m_specs)) {
-        m_systemInitialized = true;
-        m_system->setRenderer(m_engine.get());
-        getSyscallDispatcher().setLogger(&getLogger());
-        qDebug() << "[GUI] System initialized";
+// =============================================================================
+// STYLESHEET
+// =============================================================================
+
+void WeaR_GUI::applyStylesheet() {
+    setStyleSheet(getStyleSheet());
+}
+
+// =============================================================================
+// MAIN SETUP
+// =============================================================================
+
+void WeaR_GUI::setupUI() {
+    // Toolbar at top
+    setupToolbar();
+
+    // Game table as central widget
+    setupGameTable();
+    setCentralWidget(m_gameTable);
+
+    // Log dock at bottom
+    setupLogDock();
+
+    // Status bar
+    setupStatusBar();
+}
+
+// =============================================================================
+// TOOLBAR (RPCS3 Style)
+// =============================================================================
+
+void WeaR_GUI::setupToolbar() {
+    m_toolbar = new QToolBar("Main Toolbar", this);
+    m_toolbar->setObjectName("mainToolbar");
+    m_toolbar->setMovable(false);
+    m_toolbar->setFloatable(false);
+    m_toolbar->setIconSize(QSize(24, 24));
+    m_toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+
+    // Actions with text labels (no emojis)
+    m_loadAction = m_toolbar->addAction("Load Game");
+    m_loadAction->setShortcut(QKeySequence("Ctrl+O"));
+    connect(m_loadAction, &QAction::triggered, this, &WeaR_GUI::onLoadGame);
+
+    m_biosAction = m_toolbar->addAction("Boot BIOS");
+    connect(m_biosAction, &QAction::triggered, this, &WeaR_GUI::onBootBios);
+
+    m_toolbar->addSeparator();
+
+    m_settingsAction = m_toolbar->addAction("Settings");
+    m_settingsAction->setShortcut(QKeySequence("Ctrl+P"));
+    connect(m_settingsAction, &QAction::triggered, this, &WeaR_GUI::onOpenSettings);
+
+    m_refreshAction = m_toolbar->addAction("Refresh");
+    m_refreshAction->setShortcut(QKeySequence("F5"));
+    connect(m_refreshAction, &QAction::triggered, this, &WeaR_GUI::onRefreshGames);
+
+    addToolBar(Qt::TopToolBarArea, m_toolbar);
+}
+
+// =============================================================================
+// GAME TABLE
+// =============================================================================
+
+void WeaR_GUI::setupGameTable() {
+    m_gameTable = new QTableWidget(0, 4, this);
+    m_gameTable->setObjectName("gameTable");
+
+    // Headers
+    QStringList headers = {"Title", "Serial", "Status", "Path"};
+    m_gameTable->setHorizontalHeaderLabels(headers);
+
+    // Styling
+    m_gameTable->setShowGrid(false);
+    m_gameTable->setAlternatingRowColors(true);
+    m_gameTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_gameTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_gameTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_gameTable->verticalHeader()->setVisible(false);
+    m_gameTable->horizontalHeader()->setStretchLastSection(true);
+    m_gameTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_gameTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    m_gameTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    m_gameTable->setColumnWidth(1, 100);
+    m_gameTable->setColumnWidth(2, 80);
+
+    // Double-click to load
+    connect(m_gameTable, &QTableWidget::cellDoubleClicked, 
+            this, &WeaR_GUI::onGameDoubleClicked);
+
+    // Add placeholder row
+    m_gameTable->insertRow(0);
+    m_gameTable->setItem(0, 0, new QTableWidgetItem("No games found"));
+    m_gameTable->setItem(0, 1, new QTableWidgetItem("-"));
+    m_gameTable->setItem(0, 2, new QTableWidgetItem("-"));
+    m_gameTable->setItem(0, 3, new QTableWidgetItem("Use 'Load Game' or add games to directory"));
+}
+
+// =============================================================================
+// LOG DOCK
+// =============================================================================
+
+void WeaR_GUI::setupLogDock() {
+    m_logDock = new QDockWidget("Log", this);
+    m_logDock->setObjectName("logDock");
+    m_logDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
+    m_logDock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable);
+
+    m_logConsole = new QTextEdit();
+    m_logConsole->setObjectName("logConsole");
+    m_logConsole->setReadOnly(true);
+    m_logConsole->setPlaceholderText("System logs...");
+    m_logConsole->setMinimumHeight(120);
+
+    m_logDock->setWidget(m_logConsole);
+    addDockWidget(Qt::BottomDockWidgetArea, m_logDock);
+}
+
+// =============================================================================
+// STATUS BAR
+// =============================================================================
+
+void WeaR_GUI::setupStatusBar() {
+    QStatusBar* status = statusBar();
+    status->setObjectName("statusBar");
+
+    m_stateLabel = new QLabel("Ready");
+    m_stateLabel->setObjectName("statusLabel");
+    status->addWidget(m_stateLabel);
+
+    status->addPermanentWidget(new QLabel(" | "));
+
+    // Start with Disconnected (will update on first poll)
+    m_controllerLabel = new QLabel("Controller: Disconnected");
+    m_controllerLabel->setObjectName("statusLabel");
+    m_controllerLabel->setStyleSheet("color: #E74C3C;");
+    status->addPermanentWidget(m_controllerLabel);
+
+    status->addPermanentWidget(new QLabel(" | "));
+
+    m_fpsLabel = new QLabel("FPS: --");
+    m_fpsLabel->setObjectName("statusLabel");
+    status->addPermanentWidget(m_fpsLabel);
+}
+
+// =============================================================================
+// TOOLBAR ACTIONS
+// =============================================================================
+
+void WeaR_GUI::onLoadGame() {
+    openGameFileDialog();
+}
+
+void WeaR_GUI::onBootBios() {
+    try {
+        log("[BIOS] === BOOT BIOS CLICKED ===", 1);
+        
+        log("[BIOS] Step 1: Getting emulator core...", 1);
+        auto& core = getEmulatorCore();
+        
+        log("[BIOS] Step 2: Checking initialization...", 1);
+        if (!core.isInitialized()) {
+            log("[BIOS] Core not initialized, initializing now...", 1);
+            if (!core.initialize(m_specs)) {
+                log("[ERROR] Failed to initialize emulator core", 3);
+                return;
+            }
+            log("[BIOS] ✓ Core initialized successfully", 1);
+        } else {
+            log("[BIOS] ✓ Core already initialized", 1);
+        }
+
+        log("[BIOS] Step 3: Loading internal BIOS...", 1);
+        uint64_t entry = core.loadInternalBios();
+        if (entry == 0) {
+            log("[ERROR] Failed to load internal BIOS (returned 0)", 3);
+            return;
+        }
+        log(QString("[BIOS] ✓ BIOS loaded, entry point: 0x%1").arg(entry, 0, 16), 1);
+
+        log("[BIOS] Step 4: Setting up game state...", 1);
+        m_entryPoint = entry;
+        m_loadedGamePath = "[Internal BIOS]";
+        updateGameState(GameState::Loaded, "Internal BIOS");
+        log("[BIOS] ✓ Game state updated", 1);
+
+        log("[BIOS] Step 5: Starting emulation...", 1);
+        if (core.run()) {
+            log("[BIOS] ✓ Emulation started successfully!", 1);
+            updateGameState(GameState::Running, "Running");
+            startRenderLoop();
+        } else {
+            log("[ERROR] Failed to start emulation", 3);
+            updateGameState(GameState::Error, "Start failed");
+        }
+        
+    } catch (const std::exception& e) {
+        log(QString("[EXCEPTION] onBootBios crashed: %1").arg(e.what()), 3);
+        updateGameState(GameState::Error, "Exception");
+    } catch (...) {
+        log("[EXCEPTION] onBootBios crashed with unknown exception!", 3);
+        updateGameState(GameState::Error, "Unknown exception");
     }
 }
 
+void WeaR_GUI::onOpenSettings() {
+    SettingsDialog dialog(this);
+    dialog.exec();
+}
+
+void WeaR_GUI::onRefreshGames() {
+    log("[SCAN] Refreshing game list...", 1);
+    scanGameDirectory();
+}
+
+void WeaR_GUI::onGameDoubleClicked(int row, int column) {
+    (void)column;
+    QTableWidgetItem* pathItem = m_gameTable->item(row, 3);
+    if (pathItem && !pathItem->text().isEmpty() && !pathItem->text().startsWith("Use ")) {
+        loadGameFile(pathItem->text());
+    }
+}
+
+// =============================================================================
+// GAME LOADING
+// =============================================================================
+
 void WeaR_GUI::openGameFileDialog() {
-    QString filter = "PS4 Executables (*.elf *.bin *.self);;All Files (*.*)";
+    QString filter = "PS4 Executables (*.pkg *.bin *.self *.elf);;All Files (*.*)";
     QString filepath = QFileDialog::getOpenFileName(this, "Select Game", QString(), filter);
-    if (!filepath.isEmpty()) loadGameFile(filepath);
+    if (!filepath.isEmpty()) {
+        loadGameFile(filepath);
+    }
 }
 
 void WeaR_GUI::loadGameFile(const QString& filepath) {
-    if (!m_systemInitialized) initializeSystem();
-    if (!m_systemInitialized) { updateGameState(GameState::Error, "System init failed"); return; }
+    log(QString("[LOAD] Loading: %1").arg(filepath), 1);
     updateGameState(GameState::Loading, "Loading...");
-    
-    // Auto-mount /app0 to the game's directory
-    QFileInfo fileInfo(filepath);
-    QString gameDir = fileInfo.absolutePath();
-    WeaR_VFS::get().mount("/app0", gameDir.toStdString());
-    WeaR_VFS::get().mount("/hostapp", gameDir.toStdString());
-    getLogger().log(QString("VFS: Mounted /app0 -> %1").arg(gameDir).toStdString(), LogLevel::Info);
-    
-    m_entryPoint = m_system->loadGame(filepath.toStdString());
-    if (m_entryPoint == 0) { updateGameState(GameState::Error, "Load failed"); return; }
+
+    auto& core = getEmulatorCore();
+    if (!core.isInitialized()) {
+        if (!core.initialize(m_specs)) {
+            log("[ERROR] Failed to initialize emulator core", 3);
+            updateGameState(GameState::Error, "Init failed");
+            return;
+        }
+    }
+
+    uint64_t entry = core.loadGame(filepath.toStdString());
+    if (entry == 0) {
+        log("[ERROR] Failed to load game file", 3);
+        updateGameState(GameState::Error, "Load failed");
+        return;
+    }
+
+    m_entryPoint = entry;
     m_loadedGamePath = filepath;
-    updateGameState(GameState::Loaded, QString::fromStdString(std::format("Entry 0x{:X}", m_entryPoint)));
-    emit gameLoaded(m_entryPoint);
+    log(QString("[LOAD] Entry point: 0x%1").arg(entry, 16, 16, QChar('0')).toUpper(), 1);
+    updateGameState(GameState::Loaded, QFileInfo(filepath).fileName());
+
+    bootGame();
 }
 
 void WeaR_GUI::bootGame() {
-    if (!m_systemInitialized || m_entryPoint == 0) return;
-    getLogger().log(std::string("Booting game..."), LogLevel::Info);
-    m_system->boot();
-    updateGameState(GameState::Running, "Running");
-    m_cpuMonitorTimer->start();
-    if (m_kernelLogDock) m_kernelLogDock->show();
+    if (m_gameState != GameState::Loaded) return;
+
+    log("[BOOT] Starting emulation...", 1);
+    initializeRenderEngine();
+    startRenderLoop();
+
+    updateGameState(GameState::Running, QFileInfo(m_loadedGamePath).fileName());
 }
 
 void WeaR_GUI::updateGameState(GameState state, const QString& message) {
     m_gameState = state;
-    if (m_gameStatusLabel) {
-        QString text;
-        switch (state) {
-            case GameState::NoGame:  text = "No game"; break;
-            case GameState::Loading: text = "Loading..."; break;
-            case GameState::Loaded:  text = message.isEmpty() ? "Ready" : message; break;
-            case GameState::Running: text = "Running"; break;
-            case GameState::Paused:  text = "Paused"; break;
-            case GameState::Error:   text = "Error: " + message; break;
-        }
-        m_gameStatusLabel->setText(text);
+
+    QString stateText;
+    switch (state) {
+        case GameState::NoGame:   stateText = "Ready"; break;
+        case GameState::Loading:  stateText = "Loading..."; break;
+        case GameState::Loaded:   stateText = "Loaded"; break;
+        case GameState::Running:  stateText = "Running"; break;
+        case GameState::Paused:   stateText = "Paused"; break;
+        case GameState::Error:    stateText = "Error"; break;
     }
-    if (m_launchGameBtn) {
-        switch (state) {
-            case GameState::NoGame:  m_launchGameBtn->setText("Load Game"); m_launchGameBtn->setEnabled(true); break;
-            case GameState::Loading: m_launchGameBtn->setText("Loading..."); m_launchGameBtn->setEnabled(false); break;
-            case GameState::Loaded:  m_launchGameBtn->setText("Boot"); m_launchGameBtn->setEnabled(true); break;
-            case GameState::Running: m_launchGameBtn->setText("Pause"); m_launchGameBtn->setEnabled(true); break;
-            case GameState::Paused:  m_launchGameBtn->setText("Resume"); break;
-            case GameState::Error:   m_launchGameBtn->setText("Retry"); m_launchGameBtn->setEnabled(true); break;
+
+    if (!message.isEmpty()) {
+        stateText = message;
+    }
+
+    m_stateLabel->setText(stateText);
+}
+
+void WeaR_GUI::scanGameDirectory() {
+    // Placeholder - scan a games directory
+    log("[SCAN] Directory scanning not yet implemented", 2);
+}
+
+// =============================================================================
+// LOGGING
+// =============================================================================
+
+void WeaR_GUI::log(const QString& message, int level) {
+    if (!m_logConsole) return;
+
+    QString color;
+    switch (level) {
+        case 0: color = "#5A5A5A"; break;  // Debug
+        case 1: color = "#CCCCCC"; break;  // Info
+        case 2: color = "#E67E22"; break;  // Warning
+        case 3: color = "#E74C3C"; break;  // Error
+        default: color = "#CCCCCC";
+    }
+
+    QString timestamp = QTime::currentTime().toString("HH:mm:ss");
+    m_logConsole->append(QString("<span style='color:#5A5A5A'>[%1]</span> <span style='color:%2'>%3</span>")
+        .arg(timestamp, color, message));
+
+    emit logMessage(message, level);
+}
+
+// =============================================================================
+// INPUT SYSTEM
+// =============================================================================
+
+void WeaR_GUI::initializeInputSystem() {
+    m_input = std::make_unique<WeaR_Input>();
+
+    // Poll at ~60Hz (16ms) for real-time response
+    m_inputTimer = new QTimer(this);
+    connect(m_inputTimer, &QTimer::timeout, this, &WeaR_GUI::onInputPoll);
+    m_inputTimer->start(16);
+
+    // Immediate first poll to set initial status
+    onInputPoll();
+}
+
+void WeaR_GUI::onInputPoll() {
+    if (!m_input) return;
+
+    // Poll updates controller state internally
+    ScePadData padState = m_input->poll();
+
+    bool currentlyConnected = m_input->isControllerConnected();
+    
+    // Update status bar on EVERY state change
+    if (m_controllerConnected != currentlyConnected) {
+        m_controllerConnected = currentlyConnected;
+        updateControllerStatus();
+        if (m_controllerConnected) {
+            log("[INPUT] Controller connected", 1);
+        } else {
+            log("[INPUT] Controller disconnected", 2);
         }
     }
 }
 
-void WeaR_GUI::onCpuMonitorUpdate() {
-    if (!m_system || !m_systemInitialized) return;
-    auto ctx = m_system->getCpuSnapshot();
-    auto cpu = m_system->getCpu();
-    if (m_cpuRIPLabel) m_cpuRIPLabel->setText(QString("RIP: 0x%1").arg(ctx.RIP, 16, 16, QChar('0')).toUpper());
-    if (m_cpuRAXLabel) m_cpuRAXLabel->setText(QString("RAX: 0x%1").arg(ctx.RAX, 16, 16, QChar('0')).toUpper());
-    if (m_cpuOpcodeLabel && cpu) m_cpuOpcodeLabel->setText(QString("Opcode: 0x%1").arg(cpu->getLastOpcode(), 2, 16, QChar('0')).toUpper());
-    if (m_cpuInsnCountLabel) m_cpuInsnCountLabel->setText(QString("Insns: %1").arg(m_system->getInstructionCount()));
-    if (m_cpuStateLabel && cpu) {
-        QString s;
-        switch (cpu->getState()) {
-            case CpuState::Stopped: s = "STOPPED"; break;
-            case CpuState::Running: s = "RUNNING"; break;
-            case CpuState::Paused:  s = "PAUSED"; break;
-            case CpuState::Halted:  s = "HALTED"; break;
-            case CpuState::Faulted: s = "FAULT"; break;
-        }
-        m_cpuStateLabel->setText("State: " + s);
+void WeaR_GUI::updateControllerStatus() {
+    if (m_controllerConnected) {
+        m_controllerLabel->setText("Controller: Connected");
+        m_controllerLabel->setStyleSheet("color: #4EC9B0;");
+    } else {
+        m_controllerLabel->setText("Controller: Disconnected");
+        m_controllerLabel->setStyleSheet("color: #E74C3C;");
     }
 }
 
-void WeaR_GUI::onKernelLogUpdate(const QString& message, int level) {
-    (void)level;
-    if (m_kernelLogText) {
-        m_kernelLogText->append(message);
-        QScrollBar* sb = m_kernelLogText->verticalScrollBar();
-        sb->setValue(sb->maximum());
+// =============================================================================
+// RENDER ENGINE
+// =============================================================================
+
+void WeaR_GUI::initializeRenderEngine() {
+    if (m_engineInitialized) return;
+
+    // Create render widget
+    if (!m_renderWidget) {
+        m_renderWidget = new QWidget(this);
+        m_renderWidget->setMinimumSize(640, 480);
+    }
+
+    m_engine = std::make_unique<WeaR_RenderEngine>();
+
+    RenderEngineConfig config;
+    config.appName = "WeaR-emu";
+    config.windowWidth = static_cast<uint32_t>(m_renderWidget->width());
+    config.windowHeight = static_cast<uint32_t>(m_renderWidget->height());
+    config.enableValidation = false;
+
+    auto hwnd = reinterpret_cast<HWND>(m_renderWidget->winId());
+    auto result = m_engine->initVulkan(m_specs, hwnd, config);
+
+    if (!result) {
+        log(QString("[VULKAN] Init failed: %1").arg(QString::fromStdString(result.error())), 3);
+        return;
+    }
+
+    m_engineInitialized = true;
+    log("[VULKAN] Render engine initialized", 1);
+}
+
+void WeaR_GUI::startRenderLoop() {
+    if (m_renderTimer) return;
+
+    m_renderTimer = new QTimer(this);
+    connect(m_renderTimer, &QTimer::timeout, this, &WeaR_GUI::onRenderFrame);
+    m_renderTimer->start(16);
+
+    m_fpsTimer.start();
+    m_frameCount = 0;
+}
+
+void WeaR_GUI::stopRenderLoop() {
+    if (m_renderTimer) {
+        m_renderTimer->stop();
+        delete m_renderTimer;
+        m_renderTimer = nullptr;
     }
 }
+
+void WeaR_GUI::onRenderFrame() {
+    if (!m_engineInitialized || !m_engine) return;
+
+    auto result = m_engine->renderFrame();
+    if (!result) {
+        log(QString("[RENDER] Error: %1").arg(QString::fromStdString(result.error())), 3);
+    }
+
+    m_frameCount++;
+    updateFPSCounter();
+}
+
+void WeaR_GUI::updateFPSCounter() {
+    qint64 elapsed = m_fpsTimer.elapsed();
+    if (elapsed >= 1000) {
+        m_currentFPS = static_cast<float>(m_frameCount) * 1000.0f / elapsed;
+        m_fpsLabel->setText(QString("FPS: %1").arg(m_currentFPS, 0, 'f', 1));
+        m_frameCount = 0;
+        m_fpsTimer.restart();
+    }
+}
+
+// =============================================================================
+// EVENTS
+// =============================================================================
 
 void WeaR_GUI::showEvent(QShowEvent* event) {
     QMainWindow::showEvent(event);
-    if (!m_engineInitialized) QTimer::singleShot(100, this, &WeaR_GUI::initializeRenderEngine);
-}
-
-void WeaR_GUI::resizeEvent(QResizeEvent* event) {
-    QMainWindow::resizeEvent(event);
-    if (m_engineInitialized && m_engine && m_renderWidget) {
-        QSize s = m_renderWidget->size();
-        if (s.width() > 0 && s.height() > 0) m_engine->onWindowResize(s.width(), s.height());
-    }
+    log("[GUI] Window ready", 0);
 }
 
 void WeaR_GUI::closeEvent(QCloseEvent* event) {
     stopRenderLoop();
-    m_cpuMonitorTimer->stop();
-    if (m_system) m_system->shutdown();
-    if (m_engine) { m_engine->shutdown(); m_engineInitialized = false; }
     QMainWindow::closeEvent(event);
 }
 
-void WeaR_GUI::initializeRenderEngine() {
-    if (m_engineInitialized || !m_engine || !m_renderWidget) return;
-#ifdef Q_OS_WIN
-    HWND hwnd = reinterpret_cast<HWND>(m_renderWidget->winId());
-    if (!hwnd) return;
-    QSize s = m_renderWidget->size();
-    RenderEngineConfig cfg{}; cfg.windowWidth = s.width(); cfg.windowHeight = s.height();
-    auto r = m_engine->initVulkan(m_specs, hwnd, cfg);
-    if (!r) { qWarning() << "[GUI] Engine fail:" << QString::fromStdString(r.error()); return; }
-    m_engineInitialized = true;
-    if (m_engine->isFrameGenActive()) {
-        setFrameGenStatus(WeaRGenUIStatus::Active);
-        if (m_frameGenToggle) { m_frameGenToggle->setChecked(true); m_frameGenToggle->setText("Disable"); }
-    }
-    initializeSystem();
-    startRenderLoop();
-#endif
-}
-
-void WeaR_GUI::startRenderLoop() { if (!m_engineInitialized) return; m_fpsTimer.start(); m_frameCount = 0; m_renderTimer->start(0); }
-void WeaR_GUI::stopRenderLoop() { if (m_renderTimer) m_renderTimer->stop(); }
-
-void WeaR_GUI::onRenderFrame() {
-    if (!m_engineInitialized || !m_engine) return;
-    auto r = m_engine->renderFrame();
-    if (!r && r.error().find("out of date") != std::string::npos) {
-        QSize s = m_renderWidget->size();
-        m_engine->onWindowResize(s.width(), s.height());
-    }
-    m_frameCount++;
-    if (m_fpsTimer.elapsed() >= 500) updateFPSCounter();
-}
-
-void WeaR_GUI::updateFPSCounter() {
-    qint64 e = m_fpsTimer.elapsed();
-    if (e > 0) m_currentFPS = m_frameCount * 1000.0f / e;
-    m_frameCount = 0; m_fpsTimer.restart();
-    if (m_fpsLabel) {
-        QString t = QString::fromStdString(std::format("FPS: {:.1f}", m_currentFPS));
-        if (m_engine && m_engine->isFrameGenActive()) t += " (WeaR-Gen)";
-        m_fpsLabel->setText(t);
-    }
-}
-
-void WeaR_GUI::setupUI() {
-    m_centralWidget = new QWidget(this); m_centralWidget->setObjectName("centralWidget");
-    setCentralWidget(m_centralWidget);
-    auto* ml = new QVBoxLayout(m_centralWidget); ml->setContentsMargins(0,0,0,0); ml->setSpacing(0);
-    setupTitleBar(); ml->addWidget(m_titleBar);
-
-    m_mainContent = new QFrame(); m_mainContent->setObjectName("mainContent");
-    auto* cl = new QHBoxLayout(m_mainContent); cl->setContentsMargins(0,0,0,0); cl->setSpacing(0);
-
-    auto* dash = new QFrame(); dash->setObjectName("dashboardPanel"); dash->setFixedWidth(300);
-    auto* dl = new QVBoxLayout(dash); dl->setContentsMargins(20,20,20,20); dl->setSpacing(16);
-
-    auto* gpu = new QFrame(); gpu->setObjectName("infoCard");
-    auto* gl = new QVBoxLayout(gpu); gl->setContentsMargins(16,14,16,14);
-    auto* gh = new QLabel("GPU"); gh->setObjectName("cardHeader"); gl->addWidget(gh);
-    m_gpuNameLabel = new QLabel(QString::fromStdString(m_specs.gpuName).left(30));
-    m_gpuNameLabel->setObjectName("gpuName"); m_gpuNameLabel->setWordWrap(true); gl->addWidget(m_gpuNameLabel);
-    m_gpuInfoLabel = new QLabel(QString::fromStdString(std::format("{} • {:.1f} TFLOPs", m_specs.vramString(), m_specs.estimatedTFLOPs)));
-    m_gpuInfoLabel->setObjectName("gpuInfo"); gl->addWidget(m_gpuInfoLabel);
-    dl->addWidget(gpu);
-
-    auto* fg = new QFrame(); fg->setObjectName("frameGenCard");
-    auto* fl = new QVBoxLayout(fg); fl->setContentsMargins(16,14,16,14);
-    auto* fr = new QHBoxLayout();
-    m_frameGenIndicator = new QFrame(); m_frameGenIndicator->setObjectName("statusIndicator"); m_frameGenIndicator->setFixedSize(12,12);
-    fr->addWidget(m_frameGenIndicator);
-    auto* ft = new QLabel("WEAR-GEN"); ft->setObjectName("cardHeader"); fr->addWidget(ft); fr->addStretch();
-    fl->addLayout(fr);
-    m_frameGenStatusLabel = new QLabel(m_specs.canRunFrameGen ? "Ready" : QString::fromStdString(m_specs.frameGenDisableReason).left(40));
-    m_frameGenStatusLabel->setObjectName("frameGenStatus"); m_frameGenStatusLabel->setWordWrap(true); fl->addWidget(m_frameGenStatusLabel);
-    m_frameGenToggle = new QPushButton(m_specs.canRunFrameGen ? "Enable" : "N/A");
-    m_frameGenToggle->setObjectName("frameGenToggle"); m_frameGenToggle->setCheckable(true); m_frameGenToggle->setEnabled(m_specs.canRunFrameGen);
-    connect(m_frameGenToggle, &QPushButton::toggled, this, &WeaR_GUI::onFrameGenToggled);
-    fl->addWidget(m_frameGenToggle);
-    dl->addWidget(fg);
-
-    dl->addStretch();
-    m_launchGameBtn = new QPushButton("Load Game"); m_launchGameBtn->setObjectName("launchBtn"); m_launchGameBtn->setMinimumHeight(44);
-    connect(m_launchGameBtn, &QPushButton::clicked, this, &WeaR_GUI::onLaunchGameClicked);
-    dl->addWidget(m_launchGameBtn);
-
-    cl->addWidget(dash);
-    setupRenderWidget(); cl->addWidget(m_renderWidget, 1);
-    ml->addWidget(m_mainContent, 1);
-    setupStatusFooter(); ml->addWidget(m_statusFooter);
-    updateStatusIndicator();
-}
-
-void WeaR_GUI::setupTitleBar() {
-    m_titleBar = new QFrame(); m_titleBar->setObjectName("titleBar"); m_titleBar->setFixedHeight(44);
-    auto* l = new QHBoxLayout(m_titleBar); l->setContentsMargins(16,0,8,0); l->setSpacing(12);
-    m_logoLabel = new QLabel("◆"); m_logoLabel->setObjectName("logoLabel"); l->addWidget(m_logoLabel);
-    m_titleLabel = new QLabel("WeaR-emu"); m_titleLabel->setObjectName("titleLabel"); l->addWidget(m_titleLabel);
-    auto* sub = new QLabel("PlayStation 4 Emulator"); sub->setObjectName("subtitleLabel"); l->addWidget(sub);
-    l->addStretch();
-    m_minimizeBtn = new QPushButton("─"); m_minimizeBtn->setObjectName("windowBtn"); m_minimizeBtn->setFixedSize(46,32);
-    connect(m_minimizeBtn, &QPushButton::clicked, this, &WeaR_GUI::onMinimizeClicked); l->addWidget(m_minimizeBtn);
-    m_maximizeBtn = new QPushButton("□"); m_maximizeBtn->setObjectName("windowBtn"); m_maximizeBtn->setFixedSize(46,32);
-    connect(m_maximizeBtn, &QPushButton::clicked, this, &WeaR_GUI::onMaximizeClicked); l->addWidget(m_maximizeBtn);
-    m_closeBtn = new QPushButton("✕"); m_closeBtn->setObjectName("closeBtn"); m_closeBtn->setFixedSize(46,32);
-    connect(m_closeBtn, &QPushButton::clicked, this, &WeaR_GUI::onCloseClicked); l->addWidget(m_closeBtn);
-}
-
-void WeaR_GUI::setupDashboard() {}
-
-void WeaR_GUI::setupRenderWidget() {
-    m_renderWidget = new QWidget(); m_renderWidget->setObjectName("renderWidget");
-    m_renderWidget->setAttribute(Qt::WA_NativeWindow);
-    m_renderWidget->setAttribute(Qt::WA_PaintOnScreen);
-    m_renderWidget->setAttribute(Qt::WA_NoSystemBackground);
-    m_renderWidget->setMinimumSize(640, 480);
-    m_renderWidget->winId();
-}
-
-void WeaR_GUI::setupStatusFooter() {
-    m_statusFooter = new QFrame(); m_statusFooter->setObjectName("statusFooter"); m_statusFooter->setFixedHeight(32);
-    auto* l = new QHBoxLayout(m_statusFooter); l->setContentsMargins(20,0,20,0); l->setSpacing(20);
-    auto* v = new QLabel("v0.1.0-alpha"); v->setObjectName("footerLabel"); l->addWidget(v);
-    m_gameStatusLabel = new QLabel("No game"); m_gameStatusLabel->setObjectName("gameStatusLabel"); l->addWidget(m_gameStatusLabel);
-    l->addStretch();
-    m_fpsLabel = new QLabel("FPS: --"); m_fpsLabel->setObjectName("fpsLabel"); l->addWidget(m_fpsLabel);
-    m_frameGenModeLabel = new QLabel(m_specs.supportsFloat16 ? "FP16" : "FP32"); m_frameGenModeLabel->setObjectName("footerLabel"); l->addWidget(m_frameGenModeLabel);
-}
-
-void WeaR_GUI::setupCpuMonitorDock() {
-    m_cpuMonitorDock = new QDockWidget("CPU Monitor", this);
-    m_cpuMonitorDock->setObjectName("cpuMonitorDock");
-    auto* c = new QFrame(); c->setObjectName("cpuMonitorContent");
-    auto* l = new QVBoxLayout(c); l->setContentsMargins(12,12,12,12); l->setSpacing(8);
-    auto mkLbl = [&](const QString& t) { auto* lb = new QLabel(t); lb->setStyleSheet("font-family:Consolas;font-size:11px;color:#00ff9d;"); l->addWidget(lb); return lb; };
-    m_cpuStateLabel = mkLbl("State: STOPPED");
-    m_cpuRIPLabel = mkLbl("RIP: 0x0000000000000000");
-    m_cpuRAXLabel = mkLbl("RAX: 0x0000000000000000");
-    m_cpuOpcodeLabel = mkLbl("Opcode: 0x00");
-    m_cpuInsnCountLabel = mkLbl("Insns: 0");
-    l->addStretch();
-    m_cpuMonitorDock->setWidget(c);
-    addDockWidget(Qt::RightDockWidgetArea, m_cpuMonitorDock);
-    m_cpuMonitorDock->hide();
-}
-
-void WeaR_GUI::setupKernelLogDock() {
-    m_kernelLogDock = new QDockWidget("Kernel Log", this);
-    m_kernelLogDock->setObjectName("kernelLogDock");
-    m_kernelLogText = new QTextEdit();
-    m_kernelLogText->setReadOnly(true);
-    m_kernelLogText->setStyleSheet(
-        "QTextEdit {"
-        "  background-color: #0a0a0a;"
-        "  color: #00ff9d;"
-        "  font-family: 'Consolas', 'Fira Code', monospace;"
-        "  font-size: 11px;"
-        "  border: none;"
-        "  padding: 8px;"
-        "}"
-    );
-    m_kernelLogText->setPlaceholderText("Kernel output will appear here...");
-    m_kernelLogDock->setWidget(m_kernelLogText);
-    addDockWidget(Qt::BottomDockWidgetArea, m_kernelLogDock);
-    m_kernelLogDock->hide();
-}
-
-void WeaR_GUI::updateStatusIndicator() {
-    if (!m_frameGenIndicator) return;
-    QString c = (m_frameGenStatus == WeaRGenUIStatus::Active) ? "#00ff9d" : (m_frameGenStatus == WeaRGenUIStatus::Unsupported) ? "#888" : "#f44";
-    m_frameGenIndicator->setStyleSheet(QString("background-color:%1;border-radius:6px;").arg(c));
-    if (m_logoLabel) m_logoLabel->setStyleSheet(QString("color:%1;font-size:22px;font-weight:bold;").arg(c));
-}
-
-void WeaR_GUI::setAccentColor(const QColor& c) { if (m_accentColor == c) return; m_accentColor = c; updateStatusIndicator(); emit accentColorChanged(c); }
-
-void WeaR_GUI::setFrameGenStatus(WeaRGenUIStatus s) {
-    m_frameGenStatus = s;
-    m_accentColor = (s == WeaRGenUIStatus::Active) ? Colors::NeonGreen : (s == WeaRGenUIStatus::Unsupported) ? Colors::Grey : Colors::Red;
-    if (m_frameGenStatusLabel) m_frameGenStatusLabel->setText((s == WeaRGenUIStatus::Active) ? "Active" : "Disabled");
-    updateStatusIndicator();
-}
-
-void WeaR_GUI::loadStylesheet() {
-    QFile f(":/styles/DeepKernelDark.qss");
-    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) { setStyleSheet(QString::fromUtf8(f.readAll())); f.close(); }
-    updateStatusIndicator();
-}
-
-void WeaR_GUI::enableWindowsAcrylicBlur() {
-#ifdef Q_OS_WIN
-    HWND h = reinterpret_cast<HWND>(winId());
-    BOOL d = TRUE; DwmSetWindowAttribute(h, DWMWA_USE_IMMERSIVE_DARK_MODE, &d, sizeof(d));
-    auto b = DWMSBT_TRANSIENTWINDOW; DwmSetWindowAttribute(h, DWMWA_SYSTEMBACKDROP_TYPE, &b, sizeof(b));
-    MARGINS m = {-1,-1,-1,-1}; DwmExtendFrameIntoClientArea(h, &m);
-#endif
-}
-
-void WeaR_GUI::mousePressEvent(QMouseEvent* e) { if (e->button() == Qt::LeftButton && m_titleBar->geometry().contains(e->pos())) { m_isDragging = true; m_dragPosition = e->globalPosition().toPoint() - frameGeometry().topLeft(); e->accept(); return; } QMainWindow::mousePressEvent(e); }
-void WeaR_GUI::mouseMoveEvent(QMouseEvent* e) { if (m_isDragging && (e->buttons() & Qt::LeftButton)) { move(e->globalPosition().toPoint() - m_dragPosition); e->accept(); return; } QMainWindow::mouseMoveEvent(e); }
-void WeaR_GUI::mouseReleaseEvent(QMouseEvent* e) { if (e->button() == Qt::LeftButton) m_isDragging = false; QMainWindow::mouseReleaseEvent(e); }
-
 void WeaR_GUI::keyPressEvent(QKeyEvent* event) {
-    // Ignore auto-repeat events
-    if (event->isAutoRepeat()) {
-        QMainWindow::keyPressEvent(event);
-        return;
-    }
-    
-    // Forward to input manager
     WeaR_InputManager::get().handleKeyPress(event->key(), true);
-    
-    // Handle special keys
-    if (event->key() == Qt::Key_Escape) {
-        // Toggle pause
-        if (m_gameState == GameState::Running) {
-            m_system->pause();
-            updateGameState(GameState::Paused);
-        } else if (m_gameState == GameState::Paused) {
-            m_system->resume();
-            updateGameState(GameState::Running);
-        }
-    } else if (event->key() == Qt::Key_F1) {
-        // Toggle CPU monitor
-        if (m_cpuMonitorDock) m_cpuMonitorDock->setVisible(!m_cpuMonitorDock->isVisible());
-    } else if (event->key() == Qt::Key_F2) {
-        // Toggle kernel log
-        if (m_kernelLogDock) m_kernelLogDock->setVisible(!m_kernelLogDock->isVisible());
-    }
-    
     QMainWindow::keyPressEvent(event);
 }
 
 void WeaR_GUI::keyReleaseEvent(QKeyEvent* event) {
-    if (event->isAutoRepeat()) {
-        QMainWindow::keyReleaseEvent(event);
-        return;
-    }
-    
     WeaR_InputManager::get().handleKeyPress(event->key(), false);
     QMainWindow::keyReleaseEvent(event);
-}
-
-void WeaR_GUI::onMinimizeClicked() { showMinimized(); }
-void WeaR_GUI::onMaximizeClicked() { if (isMaximized()) { showNormal(); m_maximizeBtn->setText("□"); } else { showMaximized(); m_maximizeBtn->setText("❐"); } }
-void WeaR_GUI::onCloseClicked() { close(); }
-
-void WeaR_GUI::onLaunchGameClicked() {
-    switch (m_gameState) {
-        case GameState::NoGame: case GameState::Error: openGameFileDialog(); break;
-        case GameState::Loaded: bootGame(); break;
-        case GameState::Running: m_system->pause(); updateGameState(GameState::Paused); break;
-        case GameState::Paused: m_system->resume(); updateGameState(GameState::Running); break;
-        default: break;
-    }
-}
-
-void WeaR_GUI::onFrameGenToggled(bool c) {
-    if (!m_engine || !m_engineInitialized) return;
-    if (m_engine->setFrameGenEnabled(c)) { setFrameGenStatus(c ? WeaRGenUIStatus::Active : WeaRGenUIStatus::Disabled); m_frameGenToggle->setText(c ? "Disable" : "Enable"); }
 }
 
 } // namespace WeaR

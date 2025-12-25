@@ -79,6 +79,7 @@ set(WEAR_SOURCES
     
     # Loader
     src/Loader/WeaR_ElfLoader.cpp
+    src/Loader/WeaR_PkgLoader.cpp
     
     # Graphics
     src/Graphics/WeaR_RenderEngine.cpp
@@ -88,6 +89,7 @@ set(WEAR_SOURCES
     # GUI
     src/GUI/WeaR_GUI.cpp
     src/GUI/WeaR_Logger.cpp
+    src/GUI/WeaR_SettingsDialog.cpp
     
     # HLE
     src/HLE/WeaR_Syscalls.cpp
@@ -125,6 +127,7 @@ set(WEAR_HEADERS
     
     src/GUI/WeaR_GUI.h
     src/GUI/WeaR_Logger.h
+    src/GUI/WeaR_SettingsDialog.h
     
     src/HLE/WeaR_Syscalls.h
     src/HLE/Graphics/WeaR_GnmDriver.h
@@ -143,6 +146,7 @@ add_executable(WeaR-emu WIN32
     ${WEAR_SOURCES}
     ${WEAR_HEADERS}
     resources/resources.qrc
+    resources/app_icon.rc
 )
 
 target_include_directories(WeaR-emu PRIVATE
@@ -159,6 +163,7 @@ target_link_libraries(WeaR-emu PRIVATE
     VMA
     dwmapi
     uxtheme
+    xinput
 )
 
 # ============================================================================

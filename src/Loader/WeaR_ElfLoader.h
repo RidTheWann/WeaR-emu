@@ -155,6 +155,16 @@ public:
         WeaR_Memory& memory);
 
     /**
+     * @brief Load an ELF from a memory buffer (for PKG extraction)
+     * @param data ELF data buffer
+     * @param memory Reference to emulator memory
+     * @return Load result with entry point, or error
+     */
+    [[nodiscard]] std::expected<ElfLoadResult, ErrorType> loadElfFromMemory(
+        const std::vector<uint8_t>& data,
+        WeaR_Memory& memory);
+
+    /**
      * @brief Validate ELF header without loading
      * @param filepath Path to the ELF file
      * @return true if valid PS4 ELF

@@ -21,7 +21,7 @@ namespace WeaR {
 class WeaR_Memory;
 class WeaR_Cpu;
 class WeaR_RenderEngine;
-class WeaR_Specs;
+struct WeaR_Specs;
 struct WeaR_Context;
 
 // =============================================================================
@@ -202,6 +202,7 @@ private:
     std::atomic<EmuState> m_state{EmuState::Idle};
     bool m_initialized = false;
     bool m_gameLoaded = false;
+    bool m_isLegacyMode = false;  // PS2 Classic / Non-executable games
     std::string m_gamePath;
     uint64_t m_entryPoint = 0;
 

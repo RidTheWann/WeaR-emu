@@ -180,6 +180,7 @@ private:
 
     // Helpers
     std::optional<uint32_t> findQueueFamily(VkQueueFlags flags, bool dedicated = false);
+    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     AllocatedImage createImage(VkFormat format, VkExtent2D extent, VkImageUsageFlags usage);
     AllocatedBuffer createBuffer(VkDeviceSize size, VkBufferUsageFlags usage);
     void destroyImage(AllocatedImage& image);

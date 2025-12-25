@@ -37,6 +37,24 @@ namespace PadButton {
     constexpr uint32_t SHARE      = 0x00000001;
 }
 
+// SCE Button aliases for XInput mapping
+constexpr uint32_t SCE_PAD_BUTTON_CROSS     = PadButton::CROSS;
+constexpr uint32_t SCE_PAD_BUTTON_CIRCLE    = PadButton::CIRCLE;
+constexpr uint32_t SCE_PAD_BUTTON_SQUARE    = PadButton::SQUARE;
+constexpr uint32_t SCE_PAD_BUTTON_TRIANGLE  = PadButton::TRIANGLE;
+constexpr uint32_t SCE_PAD_BUTTON_L1        = PadButton::L1;
+constexpr uint32_t SCE_PAD_BUTTON_R1        = PadButton::R1;
+constexpr uint32_t SCE_PAD_BUTTON_L2        = PadButton::L2;
+constexpr uint32_t SCE_PAD_BUTTON_R2        = PadButton::R2;
+constexpr uint32_t SCE_PAD_BUTTON_L3        = PadButton::L3;
+constexpr uint32_t SCE_PAD_BUTTON_R3        = PadButton::R3;
+constexpr uint32_t SCE_PAD_BUTTON_OPTIONS   = PadButton::OPTIONS;
+constexpr uint32_t SCE_PAD_BUTTON_TOUCH_PAD = PadButton::TOUCHPAD;
+constexpr uint32_t SCE_PAD_BUTTON_UP        = PadButton::UP;
+constexpr uint32_t SCE_PAD_BUTTON_DOWN      = PadButton::DOWN;
+constexpr uint32_t SCE_PAD_BUTTON_LEFT      = PadButton::LEFT;
+constexpr uint32_t SCE_PAD_BUTTON_RIGHT     = PadButton::RIGHT;
+
 // =============================================================================
 // CONTROLLER STATE STRUCTURE
 // =============================================================================
@@ -211,5 +229,48 @@ struct ScePadData {
 #pragma pack(pop)
 
 static_assert(sizeof(ScePadData) == 0x68, "ScePadData size mismatch");
+
+// =============================================================================
+// XINPUT-BASED INPUT CLASS
+// =============================================================================
+
+/**
+ * @brief XInput/Keyboard hybrid input handler
+ */
+class WeaR_Input {
+public:
+    WeaR_Input();
+    ~WeaR_Input();
+    WeaR_Input(WeaR_Input&&) noexcept;
+    WeaR_Input& operator=(WeaR_Input&&) noexcept;
+
+    // Delete copy
+    WeaR_Input(const WeaR_Input&) = delete;
+    WeaR_Input& operator=(const WeaR_Input&) = delete;
+
+    /**
+     * @brief Poll current controller state
+     */
+    [[nodiscard]] ScePadData poll();
+
+    /**
+     * @brief Set keyboard fallback state
+     */
+    void setKeyboardState(const ScePadData& state);
+
+    /**
+     * @brief Check if XInput controller is connected
+     */
+    [[nodiscard]] bool isControllerConnected() const;
+
+    /**
+     * @brief Re-detect connected controllers
+     */
+    void detectControllers();
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> m_impl;
+};
 
 } // namespace WeaR

@@ -258,4 +258,87 @@ std::expected<ElfLoadResult, WeaR_ElfLoader::ErrorType> WeaR_ElfLoader::loadElf(
     return result;
 }
 
+// =============================================================================
+// LOAD FROM MEMORY BUFFER (for PKG extraction)
+// =============================================================================
+
+std::expected<ElfLoadResult, WeaR_ElfLoader::ErrorType> WeaR_ElfLoader::loadElfFromMemory(
+    const std::vector<uint8_t>& data,
+    WeaR_Memory& memory)
+{
+    ElfLoadResult result;
+    size_t fileSize = data.size();
+
+    qDebug() << "[ElfLoader] Loading ELF from memory buffer (" << fileSize << "bytes)";
+
+    if (fileSize < sizeof(Elf64::Ehdr)) {
+        return std::unexpected("Buffer too small to contain ELF header");
+    }
+
+    // Parse ELF header
+    const Elf64::Ehdr* header = reinterpret_cast<const Elf64::Ehdr*>(data.data());
+
+    if (!validateHeader(*header)) {
+        return std::unexpected("Invalid ELF header (not a valid PS4 executable)");
+    }
+
+    result.entryPoint = header->e_entry;
+    result.elfType = (header->e_type == Elf64::ET_EXEC) ? "Executable" : "Shared Object";
+
+    qDebug() << "[ElfLoader] Type:" << QString::fromStdString(result.elfType);
+    qDebug() << "[ElfLoader] Entry Point: 0x" << QString::number(result.entryPoint, 16).toUpper();
+    qDebug() << "[ElfLoader] Program Headers:" << header->e_phnum;
+
+    // Validate program header table
+    if (header->e_phoff + header->e_phnum * sizeof(Elf64::Phdr) > fileSize) {
+        return std::unexpected("Invalid program header table offset");
+    }
+
+    const Elf64::Phdr* phdrs = reinterpret_cast<const Elf64::Phdr*>(
+        data.data() + header->e_phoff);
+
+    // Process each program header
+    uint64_t lowestAddr = UINT64_MAX;
+    uint64_t highestAddr = 0;
+
+    for (uint16_t i = 0; i < header->e_phnum; ++i) {
+        const Elf64::Phdr& phdr = phdrs[i];
+
+        // Only load PT_LOAD segments
+        if (phdr.p_type == Elf64::PT_LOAD) {
+            if (phdr.p_offset + phdr.p_filesz > fileSize) {
+                qWarning() << "[ElfLoader] Segment" << i << "extends beyond buffer";
+                continue;
+            }
+
+            if (!memory.isValidAddress(phdr.p_vaddr, phdr.p_memsz)) {
+                qWarning() << "[ElfLoader] Segment" << i << "exceeds memory bounds, skipping";
+                continue;
+            }
+
+            LoadedSegment segment;
+            loadSegment(phdr, data, memory, segment);
+            result.segments.push_back(segment);
+
+            if (phdr.p_vaddr < lowestAddr) lowestAddr = phdr.p_vaddr;
+            if (phdr.p_vaddr + phdr.p_memsz > highestAddr) highestAddr = phdr.p_vaddr + phdr.p_memsz;
+
+            qDebug() << "[ElfLoader]   Loaded" << phdr.p_filesz << "bytes to 0x"
+                     << QString::number(phdr.p_vaddr, 16).toUpper();
+        }
+    }
+
+    result.baseAddress = lowestAddr;
+    result.topAddress = highestAddr;
+    result.isValid = !result.segments.empty();
+
+    if (result.isValid) {
+        qDebug() << "[ElfLoader] Successfully loaded" << result.segments.size() << "segments from memory";
+    } else {
+        return std::unexpected("No loadable segments found in ELF buffer");
+    }
+
+    return result;
+}
+
 } // namespace WeaR
