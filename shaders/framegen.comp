@@ -1,0 +1,231 @@
+#version 450
+
+/**
+ * WeaR-Gen Frame Generation Compute Shader
+ * =========================================
+ * 
+ * Motion-compensated frame interpolation using optical flow estimation.
+ * Generates intermediate frames between Previous and Current input frames.
+ * 
+ * Optimized for FP16 operations where available (use --target-env vulkan1.3)
+ */
+
+// Enable FP16 extensions if available
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+#extension GL_EXT_shader_16bit_storage : enable
+
+// Workgroup size - 16x16 for broad GPU compatibility
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// =============================================================================
+// BINDINGS
+// =============================================================================
+
+// Input: Previous frame (t-1)
+layout(set = 0, binding = 0, rgba8) uniform readonly image2D previousFrame;
+
+// Input: Current frame (t)
+layout(set = 0, binding = 1, rgba8) uniform readonly image2D currentFrame;
+
+// Output: Generated intermediate frame (t-0.5)
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputFrame;
+
+// Push constants for runtime parameters
+layout(push_constant) uniform PushConstants {
+    float interpolationFactor;  // 0.0 = prev, 0.5 = middle, 1.0 = current
+    float motionScale;          // Motion vector amplification
+    float blendWeight;          // Edge-aware blending strength
+    int   blockRadius;          // Search block radius (default: 4)
+} params;
+
+// =============================================================================
+// CONSTANTS
+// =============================================================================
+
+const int SEARCH_RADIUS = 8;        // Motion search radius in pixels
+const float EPSILON = 0.0001;
+const float LUMA_R = 0.299;
+const float LUMA_G = 0.587;
+const float LUMA_B = 0.114;
+
+// =============================================================================
+// HELPER FUNCTIONS
+// =============================================================================
+
+/**
+ * Convert RGB to luminance for motion estimation
+ */
+float luminance(vec3 color) {
+    return dot(color, vec3(LUMA_R, LUMA_G, LUMA_B));
+}
+
+/**
+ * Calculate Sum of Absolute Differences (SAD) between blocks
+ * Used for block-matching motion estimation
+ */
+float calculateSAD(ivec2 center, ivec2 offset, int radius) {
+    float sad = 0.0;
+    ivec2 imageSize = imageSize(previousFrame);
+    
+    for (int dy = -radius; dy <= radius; ++dy) {
+        for (int dx = -radius; dx <= radius; ++dx) {
+            ivec2 prevPos = clamp(center + ivec2(dx, dy), ivec2(0), imageSize - 1);
+            ivec2 currPos = clamp(center + offset + ivec2(dx, dy), ivec2(0), imageSize - 1);
+            
+            vec3 prevColor = imageLoad(previousFrame, prevPos).rgb;
+            vec3 currColor = imageLoad(currentFrame, currPos).rgb;
+            
+            sad += abs(luminance(prevColor) - luminance(currColor));
+        }
+    }
+    
+    return sad;
+}
+
+/**
+ * Estimate motion vector using block matching
+ * Returns the offset from previous to current frame
+ */
+vec2 estimateMotionVector(ivec2 pixelCoord) {
+    int radius = max(1, params.blockRadius);
+    int searchRadius = SEARCH_RADIUS;
+    
+    ivec2 bestOffset = ivec2(0);
+    float bestSAD = 1e10;
+    
+    // Coarse search (step = 2)
+    for (int dy = -searchRadius; dy <= searchRadius; dy += 2) {
+        for (int dx = -searchRadius; dx <= searchRadius; dx += 2) {
+            ivec2 offset = ivec2(dx, dy);
+            float sad = calculateSAD(pixelCoord, offset, radius);
+            
+            if (sad < bestSAD) {
+                bestSAD = sad;
+                bestOffset = offset;
+            }
+        }
+    }
+    
+    // Fine search around best coarse match
+    ivec2 fineOffset = bestOffset;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 offset = bestOffset + ivec2(dx, dy);
+            float sad = calculateSAD(pixelCoord, offset, radius);
+            
+            if (sad < bestSAD) {
+                bestSAD = sad;
+                fineOffset = offset;
+            }
+        }
+    }
+    
+    return vec2(fineOffset) * params.motionScale;
+}
+
+/**
+ * Bilinear interpolation for sub-pixel sampling
+ */
+vec4 sampleBilinear(readonly image2D img, vec2 coord) {
+    ivec2 imageSize = imageSize(img);
+    vec2 clampedCoord = clamp(coord, vec2(0.0), vec2(imageSize) - 1.0);
+    
+    ivec2 base = ivec2(floor(clampedCoord));
+    vec2 frac = fract(clampedCoord);
+    
+    ivec2 c00 = clamp(base, ivec2(0), imageSize - 1);
+    ivec2 c10 = clamp(base + ivec2(1, 0), ivec2(0), imageSize - 1);
+    ivec2 c01 = clamp(base + ivec2(0, 1), ivec2(0), imageSize - 1);
+    ivec2 c11 = clamp(base + ivec2(1, 1), ivec2(0), imageSize - 1);
+    
+    vec4 v00 = imageLoad(img, c00);
+    vec4 v10 = imageLoad(img, c10);
+    vec4 v01 = imageLoad(img, c01);
+    vec4 v11 = imageLoad(img, c11);
+    
+    // Bilinear blend using fma for efficiency
+    vec4 top = fma(vec4(frac.x), v10 - v00, v00);
+    vec4 bottom = fma(vec4(frac.x), v11 - v01, v01);
+    return fma(vec4(frac.y), bottom - top, top);
+}
+
+/**
+ * Calculate edge weight for artifact reduction
+ * High gradient areas need more careful blending
+ */
+float calculateEdgeWeight(ivec2 coord) {
+    ivec2 imageSize = imageSize(currentFrame);
+    
+    // Sobel-like gradient estimation
+    vec3 left  = imageLoad(currentFrame, clamp(coord + ivec2(-1, 0), ivec2(0), imageSize - 1)).rgb;
+    vec3 right = imageLoad(currentFrame, clamp(coord + ivec2( 1, 0), ivec2(0), imageSize - 1)).rgb;
+    vec3 up    = imageLoad(currentFrame, clamp(coord + ivec2( 0,-1), ivec2(0), imageSize - 1)).rgb;
+    vec3 down  = imageLoad(currentFrame, clamp(coord + ivec2( 0, 1), ivec2(0), imageSize - 1)).rgb;
+    
+    float gx = luminance(right - left);
+    float gy = luminance(down - up);
+    float gradient = sqrt(gx * gx + gy * gy);
+    
+    // Higher weight = more blending at edges to reduce artifacts
+    return smoothstep(0.0, 0.2, gradient) * params.blendWeight;
+}
+
+// =============================================================================
+// MAIN
+// =============================================================================
+
+void main() {
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 imageSize = imageSize(outputFrame);
+    
+    // Bounds check
+    if (pixelCoord.x >= imageSize.x || pixelCoord.y >= imageSize.y) {
+        return;
+    }
+    
+    // =========================================================================
+    // STEP 1: Motion Vector Estimation
+    // =========================================================================
+    vec2 motionVector = estimateMotionVector(pixelCoord);
+    
+    // =========================================================================
+    // STEP 2: Backward/Forward Warping
+    // =========================================================================
+    float t = params.interpolationFactor;
+    
+    // Warp positions for intermediate frame
+    vec2 prevWarpPos = vec2(pixelCoord) + motionVector * t;
+    vec2 currWarpPos = vec2(pixelCoord) - motionVector * (1.0 - t);
+    
+    // Sample warped positions with bilinear interpolation
+    vec4 prevSample = sampleBilinear(previousFrame, prevWarpPos);
+    vec4 currSample = sampleBilinear(currentFrame, currWarpPos);
+    
+    // =========================================================================
+    // STEP 3: Temporal Blending
+    // =========================================================================
+    // Basic linear interpolation
+    vec4 interpolated = mix(prevSample, currSample, t);
+    
+    // =========================================================================
+    // STEP 4: Edge-Aware Refinement
+    // =========================================================================
+    float edgeWeight = calculateEdgeWeight(pixelCoord);
+    
+    // At edges, blend more conservatively to reduce artifacts
+    vec4 directBlend = mix(
+        imageLoad(previousFrame, pixelCoord),
+        imageLoad(currentFrame, pixelCoord),
+        t
+    );
+    
+    vec4 finalColor = mix(interpolated, directBlend, edgeWeight);
+    
+    // =========================================================================
+    // STEP 5: Output
+    // =========================================================================
+    // Clamp to valid range
+    finalColor = clamp(finalColor, vec4(0.0), vec4(1.0));
+    
+    imageStore(outputFrame, pixelCoord, finalColor);
+}

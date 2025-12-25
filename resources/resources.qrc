@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/styles">
+        <file>styles/DeepKernelDark.qss</file>
+    </qresource>
+    <qresource prefix="/shaders">
+        <file>../shaders/framegen.comp</file>
+    </qresource>
+</RCC>

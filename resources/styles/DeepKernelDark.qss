@@ -1,0 +1,340 @@
+/*
+ * WeaR-emu Deep Kernel Dark Theme
+ * ================================
+ * 
+ * A sophisticated dark theme with semi-transparent acrylic effects,
+ * neon green (#00ff9d) accents, and Windows DWM blur integration.
+ * 
+ * Design: Minimalist console dashboard aesthetic
+ */
+
+/* =============================================================================
+   WINDOW ROOT
+   ============================================================================= */
+
+#centralWidget {
+    background-color: rgba(12, 12, 16, 220);
+    border: 1px solid rgba(255, 255, 255, 15);
+    border-radius: 12px;
+}
+
+/* =============================================================================
+   TITLE BAR
+   ============================================================================= */
+
+#titleBar {
+    background-color: rgba(18, 18, 24, 200);
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 8);
+}
+
+#logoLabel {
+    color: #00ff9d;
+    font-size: 22px;
+    font-weight: bold;
+}
+
+#titleLabel {
+    color: rgba(255, 255, 255, 240);
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+#subtitleLabel {
+    color: rgba(255, 255, 255, 80);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+/* Window Buttons */
+#windowBtn {
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: rgba(255, 255, 255, 120);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+#windowBtn:hover {
+    background-color: rgba(255, 255, 255, 12);
+    color: rgba(255, 255, 255, 220);
+}
+
+#windowBtn:pressed {
+    background-color: rgba(255, 255, 255, 20);
+}
+
+#closeBtn {
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: rgba(255, 255, 255, 120);
+    font-size: 12px;
+}
+
+#closeBtn:hover {
+    background-color: #E81123;
+    color: white;
+}
+
+#closeBtn:pressed {
+    background-color: #C50F1F;
+}
+
+/* =============================================================================
+   MAIN CONTENT AREA
+   ============================================================================= */
+
+#mainContent {
+    background: transparent;
+}
+
+/* Info Cards */
+#infoCard {
+    background-color: rgba(25, 25, 35, 180);
+    border: 1px solid rgba(255, 255, 255, 10);
+    border-radius: 12px;
+}
+
+#infoCard:hover {
+    border: 1px solid rgba(0, 255, 157, 30);
+}
+
+#cardHeader {
+    color: rgba(255, 255, 255, 100);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 2px;
+}
+
+#gpuName {
+    color: rgba(255, 255, 255, 250);
+    font-size: 22px;
+    font-weight: 700;
+}
+
+#gpuInfo {
+    color: rgba(255, 255, 255, 100);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+/* =============================================================================
+   WEAR-GEN STATUS CARD
+   ============================================================================= */
+
+#frameGenCard {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(0, 255, 157, 15),
+        stop:1 rgba(0, 200, 120, 8));
+    border: 1px solid rgba(0, 255, 157, 40);
+    border-radius: 12px;
+}
+
+#frameGenCard:hover {
+    border: 1px solid rgba(0, 255, 157, 60);
+}
+
+#statusIndicator {
+    background-color: #00ff9d;
+    border-radius: 8px;
+    border: 2px solid #00ff9d;
+}
+
+#frameGenStatus {
+    color: rgba(255, 255, 255, 200);
+    font-size: 14px;
+    font-weight: 500;
+}
+
+/* =============================================================================
+   LAUNCH SECTION
+   ============================================================================= */
+
+#launchSection {
+    background: transparent;
+}
+
+#dropLabel {
+    color: rgba(255, 255, 255, 60);
+    font-size: 14px;
+    padding: 30px 50px;
+    border: 2px dashed rgba(255, 255, 255, 25);
+    border-radius: 16px;
+    background-color: rgba(255, 255, 255, 3);
+}
+
+#dropLabel:hover {
+    border-color: rgba(0, 255, 157, 50);
+    background-color: rgba(0, 255, 157, 5);
+    color: rgba(0, 255, 157, 150);
+}
+
+#launchBtn {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(0, 255, 157, 200),
+        stop:1 rgba(0, 200, 120, 180));
+    border: none;
+    border-radius: 10px;
+    color: #0a0a0f;
+    font-size: 15px;
+    font-weight: 700;
+    padding: 14px 32px;
+}
+
+#launchBtn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(0, 255, 157, 255),
+        stop:1 rgba(0, 220, 140, 230));
+}
+
+#launchBtn:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(0, 200, 120, 200),
+        stop:1 rgba(0, 160, 100, 180));
+}
+
+#launchBtn:disabled {
+    background-color: rgba(80, 80, 90, 100);
+    color: rgba(255, 255, 255, 80);
+}
+
+/* =============================================================================
+   STATUS FOOTER
+   ============================================================================= */
+
+#statusFooter {
+    background-color: rgba(8, 8, 12, 200);
+    border-top: 1px solid rgba(255, 255, 255, 6);
+    border-bottom-left-radius: 12px;
+    border-bottom-right-radius: 12px;
+}
+
+#footerLabel {
+    color: rgba(255, 255, 255, 70);
+    font-size: 11px;
+    font-weight: 500;
+}
+
+/* =============================================================================
+   SCROLLBARS
+   ============================================================================= */
+
+QScrollBar:vertical {
+    background: rgba(20, 20, 28, 150);
+    width: 10px;
+    border-radius: 5px;
+    margin: 4px;
+}
+
+QScrollBar::handle:vertical {
+    background: rgba(0, 255, 157, 80);
+    border-radius: 4px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: rgba(0, 255, 157, 120);
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar:horizontal {
+    background: rgba(20, 20, 28, 150);
+    height: 10px;
+    border-radius: 5px;
+    margin: 4px;
+}
+
+QScrollBar::handle:horizontal {
+    background: rgba(0, 255, 157, 80);
+    border-radius: 4px;
+    min-width: 30px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: rgba(0, 255, 157, 120);
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+
+/* =============================================================================
+   TOOLTIPS
+   ============================================================================= */
+
+QToolTip {
+    background-color: rgba(25, 25, 35, 250);
+    border: 1px solid rgba(0, 255, 157, 60);
+    border-radius: 6px;
+    color: rgba(255, 255, 255, 230);
+    font-size: 12px;
+    padding: 8px 12px;
+}
+
+/* =============================================================================
+   GENERAL BUTTONS
+   ============================================================================= */
+
+QPushButton {
+    background-color: rgba(50, 50, 65, 180);
+    border: 1px solid rgba(255, 255, 255, 15);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 200);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 20px;
+}
+
+QPushButton:hover {
+    background-color: rgba(60, 60, 80, 200);
+    border: 1px solid rgba(0, 255, 157, 50);
+}
+
+QPushButton:pressed {
+    background-color: rgba(40, 40, 55, 220);
+}
+
+QPushButton:disabled {
+    background-color: rgba(35, 35, 45, 150);
+    color: rgba(255, 255, 255, 50);
+    border: 1px solid rgba(255, 255, 255, 8);
+}
+
+/* =============================================================================
+   STATUS STATE VARIATIONS
+   ============================================================================= */
+
+/* Unsupported state - Grey accents */
+.state-unsupported #frameGenCard {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(136, 136, 136, 15),
+        stop:1 rgba(100, 100, 100, 8));
+    border: 1px solid rgba(136, 136, 136, 40);
+}
+
+.state-unsupported #statusIndicator {
+    background-color: #888888;
+    border-color: #888888;
+}
+
+/* Disabled state - Red accents */
+.state-disabled #frameGenCard {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(255, 68, 68, 15),
+        stop:1 rgba(200, 50, 50, 8));
+    border: 1px solid rgba(255, 68, 68, 40);
+}
+
+.state-disabled #statusIndicator {
+    background-color: #ff4444;
+    border-color: #ff4444;
+}
