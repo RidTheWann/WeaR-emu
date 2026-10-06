@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/C%2B%2B-23-00599C?style=for-the-badge&logo=cplusplus&logoColor=white" alt="C++23"/>
   <img src="https://img.shields.io/badge/Qt-6.10-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="Qt 6.10"/>
   <img src="https://img.shields.io/badge/Vulkan-1.3-AC162C?style=for-the-badge&logo=vulkan&logoColor=white" alt="Vulkan 1.3"/>
-  <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="MIT License"/>
+  <img src="https://img.shields.io/badge/License-GPL--2.0-yellow?style=for-the-badge" alt="GPL-2.0 License"/>
   <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows"/>
 </p>
 
